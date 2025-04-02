@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Success Calculator</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .page { display: none; }
+    .active { display: block; }
+    input, button, select { margin: 5px; padding: 5px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    td, th { border: 1px solid #ccc; padding: 5px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+  <h2>Success Calculator</h2>
+  <button onclick="window.location.href='index.html'">Home</button>
+  <button onclick="switchPage('success')">Success Calculator</button>
+  <button onclick="switchPage('settings')">Settings</button>
+
+  <div id="settings" class="page">
+    <h3>SKU Settings</h3>
+    <input id="desc" placeholder="SKU Description" />
+    <input id="sku" placeholder="SKU" />
+    <input id="sqft" type="number" placeholder="Square Feet Occupied" />
+    <input id="retail" type="number" placeholder="Retail" />
+    <button onclick="addSuccessItem()">Add Item</button>
+    <table id="successTable"></table>
+  </div>
+
+  <div id="success" class="page">
+    <h3>Upload Raw Data</h3>
+    <!-- Notification to instruct the user -->
+    <p style="color: red; font-weight: bold;">
+      When uploading excel file be sure to delete all tabs besides Grid 1.
+    </p>
+    <input type="file" id="successFile" accept=".xlsx" />
+    
+    <!-- Option to choose sell-through format -->
+    <label for="formatOption">Select Sell-through format: </label>
+    <select id="formatOption">
+      <option value="decimal" selected>Decimal</option>
+      <option value="percent">Percent</option>
+    </select>
+    
+    <button onclick="processSuccess()">Generate Success Calculation</button>
+    <p id="successStatus"></p>
+  </div>
+
+  <script>
+    let successItems = JSON.parse(localStorage.getItem('successItems')) || [];
+
+    function switchPage(page) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById(page).classList.add('active');
+      if (page === 'settings') renderSuccessItems();
+    }
+
+    function addSuccessItem() {
+      const desc = document.getElementById('desc').value.trim();
+      const sku = document.getElementById('sku').value.trim();
+      const sqft = parseFloat(document.getElementById('sqft').value.trim());
+      const retail = parseFloat(document.getElementById('retail').value.trim());
+      if (!desc || !sku || isNaN(sqft) || isNaN(retail)) return alert("Please fill in all fields");
+      successItems.push({ desc, sku, sqft, retail });
+      localStorage.setItem('successItems', JSON.stringify(successItems));
+      renderSuccessItems();
+    }
+
+    function deleteSuccessItem(index) {
+      successItems.splice(index, 1);
+      localStorage.setItem('successItems', JSON.stringify(successItems));
+      renderSuccessItems();
+    }
+
+    function renderSuccessItems() {
+      const table = document.getElementById('successTable');
+      table.innerHTML = '<tr><th>Description</th><th>SKU</th><th>Sq Ft</th><th>Retail</th><th>Action</th></tr>';
+      successItems.forEach((item, index) => {
+        table.innerHTML += `<tr>
+          <td>${item.desc}</td>
+          <td>${item.sku}</td>
+          <td>${item.sqft}</td>
+          <td>${item.retail}</td>
+          <td><button onclick="deleteSuccessItem(${index})">Delete</button></td>
+          </tr>`;
+      });
+    }
+
+    function processSuccess() {
+      const file = document.getElementById("successFile").files[0];
+      if (!file) return alert("Please upload a raw data file");
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet);
+
+        const missingSKUs = [];
+        const output = raw.map(row => {
+          const match = successItems.find(i => i.sku == row.SKU);
+          if (!match) missingSKUs.push(row.SKU);
+          const scanned = parseFloat(row["Units Scanned"]) || 0;
+          const retail = match ? match.retail : 0;
+          const sqft = match ? match.sqft : 0;
+          const retailValue = retail * scanned;
+          const dollarsPerSqft = sqft ? (retailValue / sqft).toFixed(2) : '';
+
+          const result = { ...row };
+          result["SKU Description"] = match ? match.desc : '';
+          result["Square Feet Occupied"] = sqft;
+          result["Retail"] = retail;
+          result["Retail Value"] = isNaN(retailValue) ? '' : retailValue.toFixed(2);
+          result["Dollars per Sq Ft"] = isNaN(retailValue) || sqft === 0 ? '' : dollarsPerSqft;
+
+          return result;
+        });
+
+        if (missingSKUs.length > 0) {
+          alert("The following SKUs are missing from Success Settings:\n" + [...new Set(missingSKUs)].join(", "));
+        }
+
+        const ws = XLSX.utils.json_to_sheet(output);
+        // Get the user's selection for the Sell-through format (assumed to be in column I)
+        const formatOption = document.getElementById("formatOption").value;
+        let formatCode = "0.00"; // Default: decimal format
+        if (formatOption === "percent") {
+          formatCode = "0.00%";
+        }
+        Object.keys(ws).forEach(cell => {
+          if (cell.startsWith("I") && cell !== "I1") {
+            ws[cell].z = formatCode;
+          }
+        });
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Success Report");
+        XLSX.writeFile(wb, "success_output.xlsx");
+        document.getElementById("successStatus").innerText = "Success calculation file downloaded.";
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    switchPage('success');
+  </script>
+</body>
+</html>

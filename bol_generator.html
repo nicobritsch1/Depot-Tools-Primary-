@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BOL Generator</title>
+  <style>
+    body { font-family: sans-serif; }
+    .header { color: black; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+  <h2 class="header">BOL Generator</h2>
+  <button onclick="window.location.href='index.html'">Home</button><br><br>
+  <input type="file" id="excelFile" accept=".xlsx" />
+  <button onclick="generateBOLs()">Generate BOLs</button>
+  <div id="status"></div>
+  <p><a href="sample_replenishment.xlsx" download>Download Sample Upload Format</a></p>
+  <h3 class="header">BOL History</h3>
+  <ul id="historyList"></ul>
+
+  <script>
+    const historyList = document.getElementById("historyList");
+    let bolCounter = parseInt(localStorage.getItem('bolCounter') || '1');
+
+    function getLocationNumber(storeName) {
+      const match = storeName.match(/(\d{4})$/);
+      return match ? match[1] : "0000";
+    }
+
+    async function generateBOLs() {
+      const fileInput = document.getElementById("excelFile").files[0];
+      if (!fileInput) {
+        alert("Please upload a file first.");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        const stores = {};
+        json.forEach((row) => {
+          if (!stores[row["Store Number"]]) stores[row["Store Number"]] = [];
+          stores[row["Store Number"]].push(row);
+        });
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        const summary = [];
+        const itemTotals = {};
+        const skuMap = {};
+
+        Object.entries(stores).forEach(([store, items], idx) => {
+          const locNo = getLocationNumber(store);
+          const bolNo = `HD${String(bolCounter++).padStart(2, "0")}`;
+
+          doc.setFontSize(12);
+          doc.text("Straight Bill of Lading", 105, 10, { align: "center" });
+
+          doc.setFontSize(10);
+          doc.setFont(undefined, "bold");
+          doc.text(`Ship To: ${store}`, 10, 20);
+          doc.text(`Location No: ${locNo}`, 10, 25);
+          doc.setFont(undefined, "normal");
+          doc.text("Ship From: Western Cactus", 10, 30);
+          doc.text("1860 Monte Vista Dr.", 10, 35);
+          doc.text("Vista, CA 92084", 10, 40);
+          doc.text("Date: 2025-03-25", 10, 45);
+          doc.text(`Bill of Lading No: ${bolNo}`, 10, 50);
+
+          doc.autoTable({
+            startY: 60,
+            head: [["QTY", "UNIT", "SKU", "DESCRIPTION"]],
+            body: items.map((item) => {
+              const desc = item["SKU Description"];
+              const qty = Math.round(item["Replenishment Needed"]);
+              summary.push([store, item["SKU"], item["Unit of Measure"], desc, qty]);
+              itemTotals[desc] = (itemTotals[desc] || 0) + qty;
+              skuMap[desc] = {
+                sku: item["SKU"],
+                unit: item["Unit of Measure"]
+              };
+              return [
+                qty,
+                item["Unit of Measure"],
+                item["SKU"],
+                desc
+              ];
+            }),
+            styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
+            theme: "grid"
+          });
+
+          doc.setFontSize(10);
+          doc.text("Recipient Signature: ___________________________", 10, 270);
+          doc.text("Date: ________________", 150, 270);
+
+          if (idx < Object.keys(stores).length - 1) {
+            doc.addPage();
+          }
+        });
+
+        // Summary Section
+        doc.addPage();
+        doc.setFontSize(12);
+        doc.text("Total Units by Item", 105, 10, { align: "center" });
+
+        const totalTable = Object.entries(itemTotals).map(([desc, qty]) => [desc, skuMap[desc].sku, skuMap[desc].unit, qty]);
+        doc.autoTable({
+          startY: 20,
+          head: [["Description", "SKU", "Unit", "Total Units"]],
+          body: totalTable,
+          styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
+          theme: "grid"
+        });
+
+        doc.setDrawColor(0);
+        doc.setLineWidth(0.5);
+        doc.line(10, doc.lastAutoTable.finalY + 10, 200, doc.lastAutoTable.finalY + 10);
+
+        doc.setFontSize(12);
+        doc.text("Store-by-Store Detail", 105, doc.lastAutoTable.finalY + 20, { align: "center" });
+        doc.autoTable({
+          startY: doc.lastAutoTable.finalY + 30,
+          head: [["Store", "SKU", "Unit", "Description", "QTY"]],
+          body: summary,
+          styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
+          theme: "grid"
+        });
+
+        const filename = `All_BOLs_${new Date().toISOString().slice(0, 10)}.pdf`;
+        doc.save(filename);
+
+        const link = document.createElement("a");
+        link.href = "#";
+        link.textContent = filename;
+        link.onclick = () => alert("File saved to downloads folder.");
+        const li = document.createElement("li");
+        li.appendChild(link);
+        historyList.appendChild(li);
+
+        localStorage.setItem('bolCounter', bolCounter.toString());
+        document.getElementById("status").innerText = `BOLs generated for ${Object.keys(stores).length} stores.`;
+      };
+
+      reader.readAsArrayBuffer(fileInput);
+    }
+  </script>
+</body>
+</html>

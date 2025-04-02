@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Payout Report Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    input, button { margin: 10px; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Payout Report Generator</h2>
+  <button onclick="window.location.href='index.html'">Home</button><br><br>
+  <input type="file" id="fileInput" accept=".xlsx" />
+  <button onclick="generateReport('UPG')">Generate UPG Report</button>
+  <button onclick="generateReport('Alive')">Generate Alive Report</button>
+  <p id="status"></p>
+
+  <script>
+    const formatDollar = val => {
+      const num = parseFloat(val);
+      return isNaN(num) ? '' : `$${num.toFixed(2)}`;
+    };
+
+    const formatPercent = val => {
+      const num = parseFloat(val);
+      return isNaN(num) ? '' : `${(num * 100).toFixed(0)}%`;
+    };
+
+    const formatCell = (key, value) => {
+      if (["Scanned $", "UPG Revenue", "Alive Revenue"].includes(key)) return formatDollar(value);
+      if (["UPG Commission", "Alive Commission"].includes(key)) return formatPercent(value);
+      return value;
+    };
+
+    async function generateReport(type) {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) return alert("Please upload a file first.");
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        const unitsScanned = json.reduce((sum, row) => sum + (parseFloat(row["Units Scanned"]) || 0), 0);
+        const scannedDollar = json.reduce((sum, row) => sum + (parseFloat(row["Scanned $"]) || 0), 0);
+
+        let totalRevenue = 0;
+        let commission = '';
+        let summaryText = '';
+        let headers = [];
+        let body = [];
+
+        if (type === 'UPG') {
+          totalRevenue = json.reduce((sum, row) => sum + (parseFloat(row["UPG Revenue"]) || 0), 0);
+          commission = formatPercent(0.15);
+          summaryText = `Total UPG Revenue: ${formatDollar(totalRevenue)}\n\nUnits Scanned: ${unitsScanned}\nScanned $: ${formatDollar(scannedDollar)}\nUPG Commission: ${commission}`;
+          headers = Object.keys(json[0]).filter(k => !k.startsWith("Alive") && k !== "Total Alive Base");
+        } else {
+          totalRevenue = json.reduce((sum, row) => sum + (parseFloat(row["Alive Revenue"]) || 0), 0);
+          commission = formatPercent(0.10);
+          summaryText = `Total Alive Revenue: ${formatDollar(totalRevenue)}\n\nUnits Scanned: ${unitsScanned}\nScanned $: ${formatDollar(scannedDollar)}\nAlive Commission: ${commission}`;
+          headers = Object.keys(json[0]).filter(k => k !== "UPG Commission" && k !== "UPG Revenue");
+        }
+
+        body = json.map(row => headers.map(h => formatCell(h, row[h])));
+
+        doc.setFontSize(12);
+        doc.setFont(undefined, 'bold');
+        doc.text(summaryText, 10, 20);
+        doc.setFont(undefined, 'normal');
+
+        doc.autoTable({
+          startY: 40,
+          head: [headers],
+          body: body,
+          styles: { fontSize: 8 },
+          theme: 'grid'
+        });
+
+        doc.save(`${type}_Report.pdf`);
+        document.getElementById("status").innerText = `${type} report generated.`;
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+  </script>
+</body>
+</html>

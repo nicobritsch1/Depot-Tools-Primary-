@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Replenishment Generator</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .page { display: none; }
+    .active { display: block; }
+    input, button, select { margin: 5px; padding: 5px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    td, th { border: 1px solid #ccc; padding: 5px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+  <h2>Replenishment Generator</h2>
+  <button onclick="window.location.href='index.html'">Home</button>
+  <button onclick="switchPage('replenish')">Replenishment Generator</button>
+  <button onclick="switchPage('settings')">Settings</button>
+
+  <div id="settings" class="page">
+    <h3>Item Settings</h3>
+    <input id="desc" placeholder="SKU Description" />
+    <input id="sku" placeholder="SKU" />
+    <input id="unit" placeholder="Unit of Measure" />
+    <input id="max" type="number" placeholder="Max Units" />
+    <button onclick="addItem()">Add Item</button>
+    <table id="itemTable"></table>
+  </div>
+
+  <div id="replenish" class="page">
+    <h3>Generate Replenishment File</h3>
+    <label>Adjust Replenishment by: </label>
+    <select id="adjustPercent">
+      <option value="0">0%</option>
+      <option value="10">10%</option>
+      <option value="20">20%</option>
+      <option value="30">30%</option>
+    </select><br><br>
+    <input type="file" id="rawFile" accept=".xlsx" />
+    <button onclick="processRawData()">Generate Replenishment File</button>
+    <p id="status"></p>
+  </div>
+
+  <script>
+    let items = JSON.parse(localStorage.getItem('replenishItems')) || [];
+
+    function switchPage(page) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById(page).classList.add('active');
+      if (page === 'settings') renderItems();
+    }
+
+    function addItem() {
+      const desc = document.getElementById('desc').value.trim();
+      const sku = document.getElementById('sku').value.trim();
+      const unit = document.getElementById('unit').value.trim();
+      const max = parseInt(document.getElementById('max').value.trim());
+      if (!desc || !sku || !unit || isNaN(max)) return alert("Please fill in all fields");
+      items.push({ desc, sku, unit, max });
+      localStorage.setItem('replenishItems', JSON.stringify(items));
+      renderItems();
+    }
+
+    function deleteItem(index) {
+      items.splice(index, 1);
+      localStorage.setItem('replenishItems', JSON.stringify(items));
+      renderItems();
+    }
+
+    function renderItems() {
+      const table = document.getElementById('itemTable');
+      table.innerHTML = '<tr><th>Description</th><th>SKU</th><th>Unit</th><th>Max</th><th>Action</th></tr>';
+      items.forEach((item, index) => {
+        table.innerHTML += `<tr><td>${item.desc}</td><td>${item.sku}</td><td>${item.unit}</td><td>${item.max}</td><td><button onclick="deleteItem(${index})">Delete</button></td></tr>`;
+      });
+    }
+
+    function processRawData() {
+      const file = document.getElementById("rawFile").files[0];
+      if (!file) return alert("Please upload a raw data file");
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet);
+
+        const missingSKUs = [];
+        const output = raw.map(row => {
+          const match = items.find(i => i.sku == row.SKU);
+          if (!match) missingSKUs.push(row.SKU);
+          const current = parseInt(row["Current On Hand"]);
+          const percent = parseInt(document.getElementById("adjustPercent").value || "0");
+          let replenishment = (match && !isNaN(current)) ? Math.max(match.max - current, 0) : 0;
+          replenishment = Math.ceil(replenishment * (1 + percent / 100));
+
+          return {
+            "Store Number": row["Store Number"],
+            "SKU": row.SKU,
+            "SKU Description": match ? match.desc : '',
+            "Unit of Measure": match ? match.unit : '',
+            "Current On Hand": isNaN(current) ? '' : current,
+            "Max Units": match ? match.max : '',
+            "Replenishment Needed": replenishment
+          };
+        });
+
+        if (missingSKUs.length > 0) {
+          alert("The following SKUs are missing from Replenishment Settings:\n" + [...new Set(missingSKUs)].join(", "));
+        }
+
+        const ws = XLSX.utils.json_to_sheet(output);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Replenishment");
+        XLSX.writeFile(wb, "replenishment_output.xlsx");
+        document.getElementById("status").innerText = "Replenishment file downloaded.";
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    switchPage('replenish');
+  </script>
+</body>
+</html>

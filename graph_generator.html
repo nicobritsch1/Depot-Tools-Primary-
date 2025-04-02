@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graph Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    canvas { max-height: 600px; max-width: 1000px; }
+  </style>
+</head>
+<body>
+  <h2>Graph Generator</h2>
+  <button onclick="window.location.href='index.html'">Home</button>
+  <p style="color: red; font-weight: bold;">Be sure to upload success_output file from success calculator.</p>
+  <br><br>
+  <input type="file" id="fileInput" accept=".xlsx" />
+  <button onclick="generateGraphs()">Generate PDF Graphs</button>
+  <p id="status"></p>
+
+  <canvas id="barChart" style="display:none;"></canvas>
+  <canvas id="lineChart" style="display:none;"></canvas>
+  <canvas id="sqftBarChart" style="display:none;"></canvas>
+  <canvas id="sqftStoreLine" style="display:none;"></canvas>
+  <canvas id="lowLine" style="display:none;"></canvas>
+  <canvas id="sellBarChart" style="display:none;"></canvas>
+  <canvas id="sellLineChart" style="display:none;"></canvas>
+
+  <script>
+    async function generateGraphs() {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) return alert("Please upload a success Excel file.");
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        const byItem = {}, byStore = {}, sqftByItem = {}, sqftByStore = {}, lowStore = {};
+        const sellByItem = {}, countSellByItem = {}, sellByStore = {}, countSellByStore = {};
+
+        json.forEach(row => {
+          const item = row["SKU Description"];
+          const store = row["Store Number"];
+          const revenue = parseFloat(row["Retail Value"]);
+          const sqft = parseFloat(row["Dollars per Sq Ft"]);
+          // Updated: use "Sell-Through" column header instead of "Sell Through"
+          const sell = parseFloat(row["Sell-Through"]);
+
+          if (item && !isNaN(revenue)) byItem[item] = (byItem[item] || 0) + revenue;
+          if (store && !isNaN(revenue)) byStore[store] = (byStore[store] || 0) + revenue;
+          if (item && !isNaN(sqft)) sqftByItem[item] = (sqftByItem[item] || 0) + sqft;
+          if (store && !isNaN(sqft)) sqftByStore[store] = (sqftByStore[store] || 0) + sqft;
+          if (store && !isNaN(revenue)) lowStore[store] = (lowStore[store] || 0) + revenue;
+          
+          if (item && !isNaN(sell)) {
+            sellByItem[item] = (sellByItem[item] || 0) + sell;
+            countSellByItem[item] = (countSellByItem[item] || 0) + 1;
+          }
+          if (store && !isNaN(sell)) {
+            sellByStore[store] = (sellByStore[store] || 0) + sell;
+            countSellByStore[store] = (countSellByStore[store] || 0) + 1;
+          }
+        });
+
+        // Calculate average Sell-Through for each SKU and Store
+        for (const key in sellByItem) {
+          sellByItem[key] = sellByItem[key] / countSellByItem[key];
+        }
+        for (const key in sellByStore) {
+          sellByStore[key] = sellByStore[key] / countSellByStore[key];
+        }
+
+        const sort = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]);
+        const limit = (arr, n = 20) => arr.slice(0, n);
+        const sortedSellByItem = sort(sellByItem);
+        const sortedSellByStore = sort(sellByStore);
+
+        const charts = [
+          ["barChart", sort(byItem), "Revenue by Item", "Revenue ($)"],
+          ["lineChart", sort(byStore), "Revenue by Store", "Revenue ($)"],
+          ["sqftBarChart", sort(sqftByItem), "Dollars per Sq Ft by Item", "$ / Sq Ft"],
+          ["sqftStoreLine", sort(sqftByStore), "Dollars per Sq Ft by Store", "$ / Sq Ft"],
+          ["lowLine", sort(lowStore).reverse(), "Lowest Revenue Stores", "Revenue ($)"],
+          ["sellBarChart", sortedSellByItem, "Sell Through by SKU", "Sell Through"],
+          ["sellLineChart", sortedSellByStore, "Sell Through by Store", "Sell Through"]
+        ];
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation: 'landscape' });
+
+        for (const [id, data, title, yAxis] of charts) {
+          const ctx = document.getElementById(id).getContext('2d');
+          document.getElementById(id).style.display = 'block';
+          const type = id.includes("Line") || id.includes("line") ? 'line' : 'bar';
+
+          new Chart(ctx, {
+            type,
+            data: {
+              labels: limit(data).map(i => i[0]),
+              datasets: [{
+                label: yAxis,
+                data: limit(data).map(i => i[1]),
+                backgroundColor: 'rgba(100,150,255,0.6)',
+                borderColor: 'rgba(100,150,255,1)',
+                fill: false
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: { ticks: { font: { size: 10, weight: "bold" }, maxRotation: 45 } },
+                y: { title: { display: true, text: yAxis }, ticks: { font: { size: 12, weight: "bold" } } }
+              }
+            }
+          });
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const img = document.getElementById(id).toDataURL();
+          doc.addPage("landscape");
+          doc.text(title, 148, 10, { align: "center" });
+          doc.addImage(img, 'PNG', 10, 20, 270, 150);
+        }
+
+        doc.deletePage(1);
+        doc.save("Success_Graphs.pdf");
+        document.getElementById("status").innerText = "PDF graphs generated.";
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  </script>
+</body>
+</html>
