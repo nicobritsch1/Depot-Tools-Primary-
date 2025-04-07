@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compare Performance</title>
+  <!-- XLSX for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- Chart.js for graphs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Chart.js Data Labels Plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <!-- jsPDF for exporting PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    canvas { max-height: 600px; margin: 40px 0; }
+    .file-labels { font-weight: bold; margin-top: 20px; }
+    .key { margin-top: 20px; }
+    .key span { display: inline-block; width: 15px; height: 15px; margin-right: 5px; }
+    .red { background-color: red; }
+    .blue { background-color: blue; }
+    .green { background-color: green; }
+  </style>
+</head>
+<body>
+  <h2>Compare Performance Between Time Periods</h2>
+  <!-- Red notice -->
+  <p style="color: red; font-weight: bold;">Uploaded files need to be in success output format.</p>
+  
+  <button onclick="window.location.href='index.html'">Home</button><br /><br />
+
+  <label><strong>Upload File for Time Period 1 (Red):</strong></label><br />
+  <input type="file" id="file1" accept=".xlsx" /><br /><br />
+  <label><strong>Upload File for Time Period 2 (Blue):</strong></label><br />
+  <input type="file" id="file2" accept=".xlsx" /><br /><br />
+  <label><strong>Upload File for Time Period 3 (Green, Optional):</strong></label><br />
+  <input type="file" id="file3" accept=".xlsx" /><br /><br />
+
+  <button onclick="compareFiles()">Compare Files</button>
+  <button onclick="exportPDF()">Export Graphs to PDF</button>
+  <p id="status"></p>
+
+  <div class="key">
+    <p><strong>Legend:</strong></p>
+    <div><span class="red"></span> <span id="label1"></span></div>
+    <div><span class="blue"></span> <span id="label2"></span></div>
+    <div><span class="green"></span> <span id="label3"></span></div>
+  </div>
+
+  <!-- Revenue Graphs -->
+  <canvas id="revenueByItem"></canvas>
+  <canvas id="revenueByStore"></canvas>
+
+  <!-- Dollars per Square Foot Graphs -->
+  <canvas id="dpsfByItem"></canvas>
+  <canvas id="dpsfByStore"></canvas>
+
+  <!-- Summary Charts -->
+  <canvas id="wholesaleDollarsSold"></canvas>
+  <canvas id="retailDollarsSold"></canvas>
+
+  <script>
+    // Parse the Excel file into JSON.
+    function parseExcel(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(sheet);
+          resolve(json);
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    // Extract and compute metrics from the data.
+    // Uses "Scanned $" for wholesale, "Retail Value" for retail,
+    // and reads "Dollars per Sq Ft" (Column P) for DPSF calculations.
+    function extractData(data) {
+      const byItem = {};
+      const byStore = {};
+      const retailByItem = {};
+      const retailByStore = {};
+      let totalWholesale = 0;
+      let totalRetail = 0;
+
+      // For DPSF averages:
+      const dpsfByItemSum = {};
+      const dpsfByItemCount = {};
+      const dpsfByStoreSum = {};
+      const dpsfByStoreCount = {};
+
+      data.forEach(row => {
+        const item = row["SKU Description"];
+        const store = row["Store Number"];
+        const revenue = parseFloat(row["Scanned $"]) || 0;
+        const retail = parseFloat(row["Retail Value"]) || 0;
+        const dpsf = parseFloat(row["Dollars per Sq Ft"]) || 0;
+
+        // Wholesale revenue by SKU and Store.
+        if (item) { byItem[item] = (byItem[item] || 0) + revenue; }
+        if (store) { byStore[store] = (byStore[store] || 0) + revenue; }
+
+        // Retail revenue by SKU and Store.
+        if (item) { retailByItem[item] = (retailByItem[item] || 0) + retail; }
+        if (store) { retailByStore[store] = (retailByStore[store] || 0) + retail; }
+
+        totalWholesale += revenue;
+        totalRetail += retail;
+
+        // DPSF accumulation for averaging.
+        if (item) {
+          dpsfByItemSum[item] = (dpsfByItemSum[item] || 0) + dpsf;
+          dpsfByItemCount[item] = (dpsfByItemCount[item] || 0) + 1;
+        }
+        if (store) {
+          dpsfByStoreSum[store] = (dpsfByStoreSum[store] || 0) + dpsf;
+          dpsfByStoreCount[store] = (dpsfByStoreCount[store] || 0) + 1;
+        }
+      });
+
+      const dpsfByItem = {};
+      for (const item in dpsfByItemSum) {
+        dpsfByItem[item] = dpsfByItemSum[item] / dpsfByItemCount[item];
+      }
+      const dpsfByStore = {};
+      for (const store in dpsfByStoreSum) {
+        dpsfByStore[store] = dpsfByStoreSum[store] / dpsfByStoreCount[store];
+      }
+
+      return { 
+        byItem, 
+        byStore, 
+        retailByItem, 
+        retailByStore, 
+        totalWholesale, 
+        totalRetail, 
+        dpsfByItem, 
+        dpsfByStore 
+      };
+    }
+
+    // Draw a grouped bar chart that supports two or three datasets.
+    function drawComparisonChart(ctxId, title, labels, data1, data2, data3) {
+      const datasets = [
+        {
+          label: document.getElementById('label1').textContent,
+          backgroundColor: 'red',
+          data: labels.map(l => data1[l] || 0)
+        },
+        {
+          label: document.getElementById('label2').textContent,
+          backgroundColor: 'blue',
+          data: labels.map(l => data2[l] || 0)
+        }
+      ];
+      if (data3) {
+        datasets.push({
+          label: document.getElementById('label3').textContent,
+          backgroundColor: 'green',
+          data: labels.map(l => data3[l] || 0)
+        });
+      }
+      new Chart(document.getElementById(ctxId).getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets
+        },
+        options: {
+          plugins: { 
+            title: { display: true, text: title } 
+          },
+          responsive: true,
+          scales: {
+            x: { ticks: { font: { size: 10 } }, stacked: false },
+            y: { stacked: false, beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Draw a simple bar chart for overall totals with skinnier bars.
+    // Uses the datalabels plugin to display sums (in white) inside the bars.
+    // Supports an optional third value.
+    function drawBarChart(ctxId, title, label, value1, value2, value3) {
+      const labels = [
+        document.getElementById('label1').textContent,
+        document.getElementById('label2').textContent
+      ];
+      const data = [value1, value2];
+      const backgroundColor = ['red', 'blue'];
+      if (typeof value3 !== 'undefined') {
+        labels.push(document.getElementById('label3').textContent);
+        data.push(value3);
+        backgroundColor.push('green');
+      }
+      new Chart(document.getElementById(ctxId).getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label,
+            backgroundColor,
+            data,
+            barPercentage: 0.5,
+            categoryPercentage: 0.5
+          }]
+        },
+        options: {
+          plugins: { 
+            title: { display: true, text: title },
+            datalabels: {
+              color: 'white',
+              anchor: 'center',
+              align: 'center',
+              formatter: function(value) { return value; },
+              font: { weight: 'bold' }
+            }
+          },
+          responsive: true,
+          scales: {
+            x: { ticks: { font: { size: 10 } }, stacked: false },
+            y: { stacked: false, beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Global variable to store key takeaway data.
+    window.keyTakeaways = {};
+
+    // Export all canvas graphs and a Key Takeaways page to a landscape PDF.
+    function exportPDF() {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF('landscape');
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(14); // Increase font size for easier reading
+
+      const canvases = document.querySelectorAll('canvas');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      canvases.forEach((canvas, index) => {
+        const imgData = canvas.toDataURL('image/png');
+        if (index > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 10, 10, pageWidth - 20, pageHeight - 20);
+      });
+
+      // Add a new page for Key Takeaways.
+      pdf.addPage();
+      let yPos = 20;
+      const margin = 10;
+      const lineSpacing = 12;
+      pdf.setFontSize(16);
+      pdf.text("Key Takeaways", 10, yPos);
+      yPos += 20;
+      pdf.setFontSize(14);
+      
+      // List Time Period Totals (labeled by time period)
+      pdf.text("Time Period Totals:", 10, yPos);
+      yPos += lineSpacing;
+      window.keyTakeaways.timePeriodTotals.forEach(function(entry) {
+          let textLine = entry.label + " - Wholesale: " + entry.wholesale.toFixed(2) + ", Retail: " + entry.retail.toFixed(2);
+          pdf.text(textLine, 10, yPos);
+          yPos += lineSpacing;
+          if (yPos > pageHeight - margin) {
+            pdf.addPage();
+            yPos = margin;
+          }
+      });
+      
+      yPos += 10;
+      // Aggregated Totals
+      pdf.text("Aggregated Totals:", 10, yPos);
+      yPos += lineSpacing;
+      pdf.text("Total Scanned $: " + window.keyTakeaways.totalWholesaleAll.toFixed(2), 10, yPos);
+      yPos += lineSpacing;
+      pdf.text("Total Retail Dollars Sold: " + window.keyTakeaways.totalRetailAll.toFixed(2), 10, yPos);
+      yPos += 20;
+      
+      // Top 5 Performing Stores
+      pdf.text("Top 5 Performing Stores by Revenue:", 10, yPos);
+      yPos += lineSpacing;
+      window.keyTakeaways.topStores.forEach((entry, i) => {
+          pdf.text((i+1) + ". " + entry[0] + ": " + entry[1].toFixed(2), 10, yPos);
+          yPos += lineSpacing;
+          if (yPos > pageHeight - margin) {
+              pdf.addPage();
+              yPos = margin;
+          }
+      });
+      
+      yPos += 10;
+      // Bottom 5 Performing Stores
+      pdf.text("Bottom 5 Performing Stores by Revenue:", 10, yPos);
+      yPos += lineSpacing;
+      window.keyTakeaways.bottomStores.forEach((entry, i) => {
+          pdf.text((i+1) + ". " + entry[0] + ": " + entry[1].toFixed(2), 10, yPos);
+          yPos += lineSpacing;
+          if (yPos > pageHeight - margin) {
+              pdf.addPage();
+              yPos = margin;
+          }
+      });
+      
+      pdf.save("graphs.pdf");
+    }
+
+    // Main function: process files, render charts, and compute key takeaways.
+    async function compareFiles() {
+      const f1 = document.getElementById("file1").files[0];
+      const f2 = document.getElementById("file2").files[0];
+      const f3 = document.getElementById("file3").files[0]; // Optional
+
+      if (!f1 || !f2) {
+        return alert("Please upload at least two files.");
+      }
+
+      // Set labels.
+      document.getElementById("label1").textContent = f1.name;
+      document.getElementById("label2").textContent = f2.name;
+      if (f3) {
+        document.getElementById("label3").textContent = f3.name;
+      } else {
+        document.getElementById("label3").textContent = "";
+      }
+
+      document.getElementById("status").textContent = "Processing...";
+
+      // Parse and extract data.
+      const data1 = extractData(await parseExcel(f1));
+      const data2 = extractData(await parseExcel(f2));
+      let data3 = null;
+      if (f3) {
+        data3 = extractData(await parseExcel(f3));
+      }
+
+      // Wholesale Revenue charts by SKU and by Store.
+      const allItems = [...new Set([
+        ...Object.keys(data1.byItem), 
+        ...Object.keys(data2.byItem), 
+        ...(data3 ? Object.keys(data3.byItem) : [])
+      ])].sort((a, b) => (data1.byItem[b] || 0) - (data1.byItem[a] || 0));
+      
+      const allStores = [...new Set([
+        ...Object.keys(data1.byStore), 
+        ...Object.keys(data2.byStore), 
+        ...(data3 ? Object.keys(data3.byStore) : [])
+      ])].sort((a, b) => (data1.byStore[b] || 0) - (data1.byStore[a] || 0));
+      
+      drawComparisonChart("revenueByItem", "Revenue by SKU (Wholesale)", allItems, data1.byItem, data2.byItem, data3 ? data3.byItem : null);
+      drawComparisonChart("revenueByStore", "Revenue by Store (Wholesale)", allStores, data1.byStore, data2.byStore, data3 ? data3.byStore : null);
+
+      // Dollars per Square Foot charts by SKU and by Store.
+      const allDpsfItems = [...new Set([
+        ...Object.keys(data1.dpsfByItem), 
+        ...Object.keys(data2.dpsfByItem), 
+        ...(data3 ? Object.keys(data3.dpsfByItem) : [])
+      ])];
+      
+      const allDpsfStores = [...new Set([
+        ...Object.keys(data1.dpsfByStore), 
+        ...Object.keys(data2.dpsfByStore), 
+        ...(data3 ? Object.keys(data3.dpsfByStore) : [])
+      ])];
+      
+      drawComparisonChart("dpsfByItem", "Dollars per Square Foot by SKU", allDpsfItems, data1.dpsfByItem, data2.dpsfByItem, data3 ? data3.dpsfByItem : null);
+      drawComparisonChart("dpsfByStore", "Dollars per Square Foot by Store", allDpsfStores, data1.dpsfByStore, data2.dpsfByStore, data3 ? data3.dpsfByStore : null);
+
+      // Summary charts for overall totals.
+      drawBarChart("wholesaleDollarsSold", "Wholesale Dollars Sold", "Total Scanned $", data1.totalWholesale, data2.totalWholesale, data3 ? data3.totalWholesale : undefined);
+      drawBarChart("retailDollarsSold", "Retail Dollars Sold", "Total Retail Value", data1.totalRetail, data2.totalRetail, data3 ? data3.totalRetail : undefined);
+
+      // Compute aggregated totals and per–time period totals for key takeaways.
+      let totalWholesaleAll = data1.totalWholesale + data2.totalWholesale + (data3 ? data3.totalWholesale : 0);
+      let totalRetailAll = data1.totalRetail + data2.totalRetail + (data3 ? data3.totalRetail : 0);
+      
+      // Compute individual time period totals.
+      const timePeriodTotals = [
+        { label: document.getElementById("label1").textContent, wholesale: data1.totalWholesale, retail: data1.totalRetail },
+        { label: document.getElementById("label2").textContent, wholesale: data2.totalWholesale, retail: data2.totalRetail }
+      ];
+      if (data3) {
+        timePeriodTotals.push({ label: document.getElementById("label3").textContent, wholesale: data3.totalWholesale, retail: data3.totalRetail });
+      }
+      
+      // Aggregate store revenues across all time periods.
+      let aggregatedStores = {};
+      function addStoreData(agg, storeData) {
+        for (const store in storeData) {
+          agg[store] = (agg[store] || 0) + storeData[store];
+        }
+      }
+      addStoreData(aggregatedStores, data1.byStore);
+      addStoreData(aggregatedStores, data2.byStore);
+      if (data3) { addStoreData(aggregatedStores, data3.byStore); }
+      
+      let topStores = Object.entries(aggregatedStores)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 5);
+      let bottomStores = Object.entries(aggregatedStores)
+                      .sort((a, b) => a[1] - b[1])
+                      .slice(0, 5);
+      
+      window.keyTakeaways = {
+        totalWholesaleAll: totalWholesaleAll,
+        totalRetailAll: totalRetailAll,
+        timePeriodTotals: timePeriodTotals,
+        topStores: topStores,
+        bottomStores: bottomStores
+      };
+
+      document.getElementById("status").textContent = "Comparison complete.";
+    }
+  </script>
+</body>
+</html>
