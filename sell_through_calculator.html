@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sell Through Calculator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .page { display: none; }
+    .active { display: block; }
+    input, button, select { margin: 5px; padding: 5px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    td, th { border: 1px solid #ccc; padding: 5px; }
+    .warning { color: red; font-weight: bold; margin-bottom: 15px; }
+    .results { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>Sell Through Calculator</h2>
+  <p class="warning">
+    Please note, if a store has sold 0 units and been shipped in 0 units for the time period selected,
+    sell through data will not populate. This 0% sell through however will be reflected in Total Sellthrough.
+  </p>
+  <button onclick="window.location.href='index.html'">Home</button>
+  <button onclick="switchPage('calculator')">Sell Through Calculator</button>
+  <button onclick="switchPage('settings')">Settings</button>
+
+  <div id="calculator" class="page active">
+    <input type="file" id="sellFile" accept=".xlsx" />
+    <button onclick="processSellThrough()">Process File</button>
+    <p id="status"></p>
+    <div id="results" class="results"></div>
+<canvas id="sellThroughChart" width="800" height="400" style="display:none;"></canvas>
+<button onclick="generateGraph()">Generate Graph</button>
+<button onclick="downloadGraph()" style="display:none;" id="downloadGraphBtn">Download Graph</button>
+
+  </div>
+
+  <div id="settings" class="page">
+    <h3>Item Settings</h3>
+    <input id="desc" placeholder="Description" />
+    <input id="sku" placeholder="SKU" />
+    <input id="maxUnits" type="number" placeholder="Max Units" />
+    <input id="totalMarketplace" type="number" placeholder="Total Units Marketplace" />
+    <button onclick="addItem()">Add / Update</button>
+    <table id="settingsTable"></table>
+  </div>
+
+  <script>
+    let sellItems = JSON.parse(localStorage.getItem('sellItems') || '[]');
+
+    function switchPage(page) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById(page).classList.add('active');
+      if (page === 'settings') renderSettings();
+    }
+
+    function addItem() {
+      const desc = document.getElementById('desc').value.trim();
+      const sku = document.getElementById('sku').value.trim();
+      const maxUnits = parseInt(document.getElementById('maxUnits').value.trim());
+      const totalMarketplace = parseInt(document.getElementById('totalMarketplace').value.trim());
+      if (!desc || !sku || isNaN(maxUnits) || isNaN(totalMarketplace)) return alert("Please fill in all fields");
+
+      const existingIndex = sellItems.findIndex(i => i.sku === sku);
+      if (existingIndex !== -1) {
+        sellItems[existingIndex] = { desc, sku, maxUnits, totalMarketplace };
+      } else {
+        sellItems.push({ desc, sku, maxUnits, totalMarketplace });
+      }
+
+      localStorage.setItem('sellItems', JSON.stringify(sellItems));
+      renderSettings();
+    }
+
+    function deleteItem(index) {
+      sellItems.splice(index, 1);
+      localStorage.setItem('sellItems', JSON.stringify(sellItems));
+      renderSettings();
+    }
+
+    function renderSettings() {
+      const table = document.getElementById("settingsTable");
+      table.innerHTML = '<tr><th>Description</th><th>SKU</th><th>Max Units</th><th>Total Marketplace</th><th>Action</th></tr>';
+      sellItems.forEach((item, index) => {
+        table.innerHTML += `<tr>
+          <td>${item.desc}</td>
+          <td>${item.sku}</td>
+          <td>${item.maxUnits}</td>
+          <td>${item.totalMarketplace}</td>
+          <td><button onclick="deleteItem(${index})">Delete</button></td>
+        </tr>`;
+      });
+    }
+
+    function processSellThrough() {
+      const file = document.getElementById("sellFile").files[0];
+      if (!file) return alert("Please upload a file.");
+      const reader = new FileReader();
+      reader.onload = e => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        const skuMap = {};
+        json.forEach(row => {
+          const sku = String(row["SKU"]).replace(".0", "");
+          if (!skuMap[sku]) skuMap[sku] = 0;
+          skuMap[sku] += parseFloat(row["Units Scanned"]) || 0;
+        });
+
+        const resultsDiv = document.getElementById("results");
+        resultsDiv.innerHTML = "";
+        const exportData = [];
+
+        sellItems.forEach(item => {
+          const scanned = skuMap[item.sku] || 0;
+          const sellThrough = item.totalMarketplace ? (scanned / item.totalMarketplace * 100).toFixed(2) : "0.00";
+          const result = `
+            <div><strong>Description:</strong> ${item.desc}<br><strong>SKU:</strong> ${item.sku}<br>
+            <strong>Total Units Scanned:</strong> ${scanned}<br>
+            <strong>Total Units Marketplace:</strong> ${item.totalMarketplace}<br>
+            <strong>Sell Through:</strong> ${sellThrough}%</div><br>
+          `;
+          resultsDiv.innerHTML += result;
+          exportData.push({
+            SKU: item.sku,
+            Description: item.desc,
+            "Total Units Scanned": scanned,
+            "Max Units": item.maxUnits,
+            "Sell Through (%)": sellThrough
+          });
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Sell Through");
+        XLSX.writeFile(wb, "sell_through_export.xlsx");
+        document.getElementById("status").innerText = "Sell through file generated and downloaded.";
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    switchPage("calculator");
+  </script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  function generateGraph() {
+    const sellItems = JSON.parse(localStorage.getItem('sellItems') || '[]');
+    const canvas = document.getElementById("sellThroughChart");
+    const ctx = canvas.getContext("2d");
+    canvas.style.display = "block";
+    document.getElementById("downloadGraphBtn").style.display = "inline-block";
+
+    const file = document.getElementById("sellFile").files[0];
+    if (!file) return alert("Please upload a file first.");
+    const reader = new FileReader();
+    reader.onload = e => {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet);
+      const skuMap = {};
+      json.forEach(row => {
+        const sku = String(row["SKU"]).replace(".0", "");
+        if (!skuMap[sku]) skuMap[sku] = 0;
+        skuMap[sku] += parseFloat(row["Units Scanned"]) || 0;
+      });
+
+      const chartData = sellItems.map(item => {
+        const scanned = skuMap[item.sku] || 0;
+        const sellThrough = item.totalMarketplace ? (scanned / item.totalMarketplace * 100) : 0;
+        return { label: item.desc, value: sellThrough };
+      }).sort((a, b) => b.value - a.value);
+
+      const labels = chartData.map(i => i.label);
+      const values = chartData.map(i => i.value);
+
+      if (window.sellChart) window.sellChart.destroy();
+      window.sellChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Sell Through (%)',
+            data: values
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { title: { display: true, text: 'Total Sell Through' } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Sell Through %' }
+            }
+          }
+        }
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function downloadGraph() {
+    const canvas = document.getElementById("sellThroughChart");
+    const url = canvas.toDataURL("image/png");
+    const link = document.createElement("a");
+    link.download = "total_sell_through.png";
+    link.href = url;
+    link.click();
+  }
+</script>
+</body>
+
+</html>
