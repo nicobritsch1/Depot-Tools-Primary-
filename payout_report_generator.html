@@ -23,7 +23,7 @@
   <script>
     const formatDollar = val => {
       const num = parseFloat(val);
-      return isNaN(num) ? '' : `$${num.toFixed(2)}`;
+      return isNaN(num) ? '' : `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     };
 
     const formatPercent = val => {
