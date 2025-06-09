@@ -7,8 +7,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    .page { display: none; }
-    .active { display: block; }
     input, button, select { margin: 5px; padding: 5px; }
     table { border-collapse: collapse; width: 100%; margin-top: 10px; }
     td, th { border: 1px solid #ccc; padding: 5px; }
@@ -16,69 +14,18 @@
 </head>
 <body>
   <h2>Payout Calculator</h2>
-  <button onclick="window.location.href='index.html'">Home</button>
-  <button onclick="switchPage('calculator')">Calculator</button>
-  <button onclick="switchPage('settings')">Settings</button>
+  <button onclick="window.location.href='index.html'">Home</button><br><br>
 
-  <div id="calculator" class="page active">
-    <input type="file" id="fileInput" accept=".xlsx" />
-    <label>UPG Commission:</label>
-    <select id="upgRate">
-      <option value="15">15%</option>
-      <option value="10">10%</option>
-    </select>
-    <label>Alive Commission:</label>
-    <select id="aliveRate">
-      <option value="10">10%</option>
-      <option value="5">5%</option>
-    </select>
-    <button onclick="processFile()">Generate Export</button>
-    <p id="status"></p>
-  </div>
-
-  <div id="settings" class="page">
-    <h3>Alive SKU Settings</h3>
-    <input id="setSku" placeholder="SKU" />
-    <input id="setDesc" placeholder="Description" />
-    <input id="setAliveBase" type="number" placeholder="Alive Base per Unit" />
-    <button onclick="addSetting()">Add / Update</button>
-    <table id="settingsTable"></table>
-  </div>
+  <input type="file" id="fileInput" accept=".xlsx" />
+  <label>UPG Commission:</label>
+  <select id="upgRate">
+    <option value="15">15%</option>
+    <option value="10">10%</option>
+  </select>
+  <button onclick="processFile()">Generate Export</button>
+  <p id="status"></p>
 
   <script>
-    let settings = JSON.parse(localStorage.getItem('aliveSettings') || '{}');
-
-    function switchPage(page) {
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-      document.getElementById(page).classList.add('active');
-      if (page === 'settings') renderSettings();
-    }
-
-    function addSetting() {
-      const sku = document.getElementById('setSku').value.trim();
-      const desc = document.getElementById('setDesc').value.trim();
-      const base = parseFloat(document.getElementById('setAliveBase').value.trim());
-      if (!sku || !desc || isNaN(base)) return alert('Fill all fields');
-      settings[sku] = { desc, base };
-      localStorage.setItem('aliveSettings', JSON.stringify(settings));
-      renderSettings();
-    }
-
-    function deleteSetting(sku) {
-      delete settings[sku];
-      localStorage.setItem('aliveSettings', JSON.stringify(settings));
-      renderSettings();
-    }
-
-    function renderSettings() {
-      const table = document.getElementById('settingsTable');
-      table.innerHTML = '<tr><th>SKU</th><th>Description</th><th>Alive Base</th><th>Action</th></tr>';
-      for (const sku in settings) {
-        const row = settings[sku];
-        table.innerHTML += `<tr><td>${sku}</td><td>${row.desc}</td><td>${row.base}</td><td><button onclick="deleteSetting('${sku}')">Delete</button></td></tr>`;
-      }
-    }
-
     function processFile() {
       const file = document.getElementById("fileInput").files[0];
       if (!file) return alert("Upload a file");
@@ -91,20 +38,16 @@
         let json = XLSX.utils.sheet_to_json(sheet);
 
         const upgRate = parseFloat(document.getElementById("upgRate").value) / 100;
-        const aliveRate = parseFloat(document.getElementById("aliveRate").value) / 100;
 
         json = json.map(row => {
-          const sku = row["SKU"];
-          const scanned = parseFloat(row["Units Scanned"]) || 0;
           const scannedDollar = parseFloat(row["Scanned $"]) || 0;
-          const aliveBase = settings[sku]?.base || 0;
+          const scanned = parseFloat(row["Units Scanned"]) || 0;
 
           row["UPG Commission"] = upgRate;
           row["UPG Revenue"] = +(scannedDollar * upgRate).toFixed(2);
-          row["Alive Base"] = aliveBase;
-          row["Total Alive Base"] = +(aliveBase * scanned).toFixed(2);
-          row["Alive Commission"] = aliveRate;
-          row["Alive Revenue"] = +(aliveBase * scanned * aliveRate).toFixed(2);
+
+          row["Alive Commission"] = 0.06;
+          row["Alive Revenue"] = +(scannedDollar * 0.06).toFixed(2);
 
           return row;
         });
@@ -131,8 +74,6 @@
       };
       reader.readAsArrayBuffer(file);
     }
-
-    switchPage("calculator");
   </script>
 </body>
 </html>
